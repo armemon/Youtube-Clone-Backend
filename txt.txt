@@ -1,0 +1,3 @@
+add .gitignore file for node from online
+
+add .prettierrc file for same formatting
