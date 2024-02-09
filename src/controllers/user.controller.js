@@ -5,6 +5,23 @@ import { uploadOnCloudinary } from "../utils/cloudinary.js";
 import { APIResponse } from "../utils/APIResponse.js";
 import fs from "fs";
 
+const generateAccessAndRefreshTokens = async (user) => {
+  try {
+    const accessToken = user.generateAccessToken(user._id);
+    const refreshToken = user.generateRefreshToken(user._id);
+
+    user.refreshToken = refreshToken;
+    await user.save({ validateBeforeSave });
+
+    return { accessToken, refreshToken };
+  } catch (error) {
+    throw new APIError(
+      500,
+      "Something went wrong while generating refresh and access token"
+    );
+  }
+};
+
 const registerUser = asyncHandler(async (req, res) => {
   //  get user details from frontend
   // validation not empty
@@ -36,9 +53,8 @@ const registerUser = asyncHandler(async (req, res) => {
   //     throw new APIError(400, "Avatar file is required");
   //   }
 
-//   console.log("req.body", req.body);
-//   console.log("res", res);
-
+  //   console.log("req.body", req.body);
+  //   console.log("res", res);
 
   try {
     if (
@@ -69,7 +85,7 @@ const registerUser = asyncHandler(async (req, res) => {
     }
 
     console.log("avatar", avatar);
-    console.log("coverImage", coverImage);   // returned null if image is not there
+    console.log("coverImage", coverImage); // returned null if image is not there
 
     const user = await User.create({
       fullName,
@@ -106,29 +122,51 @@ const registerUser = asyncHandler(async (req, res) => {
   }
 });
 
-
 const loginUser = asyncHandler(async (req, res) => {
-    const { emailUsername, password} =req.body
+  const { emailUsername, password } = req.body;
 
-    if(!emailUsername){
-        throw new APIError(400, "username or email is required")
-    }
-    const user = await User.findOne({
-        $or: [{username: emailUsername}, {email: emailUsername}]
-    })
+  if (!emailUsername) {
+    throw new APIError(400, "username or email is required");
+  }
+  const user = await User.findOne({
+    $or: [{ username: emailUsername }, { email: emailUsername }],
+  });
 
-    if(!user){
-        throw new APIError(404, "username does not exist")
-    }
+  if (!user) {
+    throw new APIError(404, "User does not exist");
+  }
 
-    const isPasswordValid = await user.isPasswordCorrect(password)
+  // use user (small letters) which is found from MongoDB to acces method inside it
+  const isPasswordValid = await user.isPasswordCorrect(password);
 
-    if(!isPasswordValid){
-        throw new APIError(401, "Invalid User credential")
-    }
+  if (!isPasswordValid) {
+    throw new APIError(401, "Invalid User credential");
+  }
 
-    
-})
+  const { accessToken, refreshToken } =
+    await generateAccessAndRefreshTokens(user);
 
+  const loggedInUser = user.select("-password");
+
+  // adding cookies
+
+  const option = {
+    httpOnly: true,
+    secure: true,
+  };
+
+  return res
+    .status(200)
+    .cookie("accessToken", accessToken, option)
+    .cookie("resfreshToken", refreshToken, option)
+    .json(
+      new APIResponse(200,
+        {
+          user: loggedInUser, accessToken, refreshToken
+        },
+        "User logged In Successfully"
+        )
+    )
+});
 
 export { registerUser };
