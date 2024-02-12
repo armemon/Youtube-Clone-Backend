@@ -119,17 +119,17 @@ const registerUser = asyncHandler(async (req, res) => {
     coverLocalPath && fs.unlinkSync(coverLocalPath);
     avatarLocalPath && fs.unlinkSync(avatarLocalPath);
     throw error;
-  }
+  } 
 });
 
 const loginUser = asyncHandler(async (req, res) => {
-  const { emailUsername, password } = req.body;
-
-  if (!emailUsername) {
-    throw new APIError(400, "username or email is required");
+  const { email, password } = req.body;
+console.log(req.body);
+  if (!email) {
+    throw new APIError(400, "email is required");
   }
   const user = await User.findOne({
-    $or: [{ username: emailUsername }, { email: emailUsername }],
+    $or: [{ username: email }, { email: email }],
   });
 
   if (!user) {
@@ -169,4 +169,27 @@ const loginUser = asyncHandler(async (req, res) => {
     )
 });
 
-export { registerUser };
+const logoutUser = asyncHandler(async (req, res)=>{
+          User.findByIdAndUpdate(req.user._id, 
+            {
+              $set: {          //set is operator
+                refreshToken: undefined
+              }
+            },
+            {
+              new: true
+            }
+          )
+
+          const options = {
+            httpOnly:true,
+            secure:true
+          }
+
+          return res.status(200)
+          .clearCookie("accessToken", options)
+          .clearCookie("resfreshToken",  options)
+          .json(new APIResponse(200, {}, "User logged out successfully"))
+})
+
+export { registerUser, loginUser , logoutUser};
