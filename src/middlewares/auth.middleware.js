@@ -1,10 +1,11 @@
 import jwt  from "jsonwebtoken";
 import { APIError } from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
+import { User } from "../models/user.model.js";
 
 
 
-export const verifyJWT = asyncHandler(async (req, res, next) =>{
+export const verifyJWT = asyncHandler(async (req, _, next) =>{
  try {
        // req.cookies is accesible due to cookie parser
        // req.header("Authorization") is for mobile app.. cokkies are not in mobile
@@ -13,7 +14,7 @@ export const verifyJWT = asyncHandler(async (req, res, next) =>{
        if (!accessToken){
            throw new APIError(401, "Unauthorized Request")
        }
-       const decodedToken= jwt.verify(token, process.env.ACCESS_TOKEN_EXPIRY)
+       const decodedToken= jwt.verify(accessToken, process.env.ACCESS_TOKEN_SECRET)
    
        const user = await User.findById(decodedToken?._id).select("-password -refreshToken")
    

@@ -4,21 +4,23 @@ import { User } from "../models/user.model.js";
 import { uploadOnCloudinary } from "../utils/cloudinary.js";
 import { APIResponse } from "../utils/APIResponse.js";
 import fs from "fs";
+import jwt from "jsonwebtoken";
 
 const generateAccessAndRefreshTokens = async (user) => {
   try {
-    const accessToken = user.generateAccessToken(user._id);
-    const refreshToken = user.generateRefreshToken(user._id);
+    // console.log("user", user);
+    // const user = await User.findById(userID)
 
+    // Everytime access token and refresh token is different
+    const accessToken = user.generateAccessToken();
+    const refreshToken = user.generateRefreshToken();
     user.refreshToken = refreshToken;
-    await user.save({ validateBeforeSave });
+    await user.save({ validateBeforeSave: false });
 
+    console.log({ accessToken, refreshToken });
     return { accessToken, refreshToken };
   } catch (error) {
-    throw new APIError(
-      500,
-      "Something went wrong while generating refresh and access token"
-    );
+    throw new APIError(500, error);
   }
 };
 
@@ -119,17 +121,18 @@ const registerUser = asyncHandler(async (req, res) => {
     coverLocalPath && fs.unlinkSync(coverLocalPath);
     avatarLocalPath && fs.unlinkSync(avatarLocalPath);
     throw error;
-  } 
+  }
 });
 
 const loginUser = asyncHandler(async (req, res) => {
-  const { email, password } = req.body;
-console.log(req.body);
-  if (!email) {
-    throw new APIError(400, "email is required");
+  const { emailOrUsername, password } = req.body;
+
+  // console.log(req.body);
+  if (!emailOrUsername) {
+    throw new APIError(400, "email or username is required");
   }
   const user = await User.findOne({
-    $or: [{ username: email }, { email: email }],
+    $or: [{ username: emailOrUsername }, { email: emailOrUsername }],
   });
 
   if (!user) {
@@ -146,7 +149,11 @@ console.log(req.body);
   const { accessToken, refreshToken } =
     await generateAccessAndRefreshTokens(user);
 
-  const loggedInUser = user.select("-password");
+  // const loggedInUser = user.select("-password");
+  const loggedInUser = await User.findById(user._id).select([
+    "-password",
+    "-refreshToken",
+  ]);
 
   // adding cookies
 
@@ -160,36 +167,96 @@ console.log(req.body);
     .cookie("accessToken", accessToken, option)
     .cookie("resfreshToken", refreshToken, option)
     .json(
-      new APIResponse(200,
+      new APIResponse(
+        200,
         {
-          user: loggedInUser, accessToken, refreshToken
+          user: loggedInUser,
+          accessToken,
+          refreshToken,
         },
         "User logged In Successfully"
-        )
-    )
+      )
+    );
 });
 
-const logoutUser = asyncHandler(async (req, res)=>{
-          User.findByIdAndUpdate(req.user._id, 
-            {
-              $set: {          //set is operator
-                refreshToken: undefined
-              }
-            },
-            {
-              new: true
-            }
-          )
+const logoutUser = asyncHandler(async (req, res) => {
+  User.findByIdAndUpdate(
+    req.user._id,
+    {
+      $set: {
+        //set is operator
+        refreshToken: undefined,
+      },
+    },
+    {
+      new: true,
+    }
+  );
 
-          const options = {
-            httpOnly:true,
-            secure:true
-          }
+  const options = {
+    httpOnly: true,
+    secure: true,
+  };
 
-          return res.status(200)
-          .clearCookie("accessToken", options)
-          .clearCookie("resfreshToken",  options)
-          .json(new APIResponse(200, {}, "User logged out successfully"))
-})
+  return res
+    .status(200)
+    .clearCookie("accessToken", options)
+    .clearCookie("resfreshToken", options)
+    .json(new APIResponse(200, {}, "User logged out successfully"));
+});
 
-export { registerUser, loginUser , logoutUser};
+const refreshAccessToken = asyncHandler(async (req, res) => {
+  const incomingRefreshToken =
+    req.cookies.refreshToken || req.body.refreshToken;
+
+  if (!incomingRefreshToken) {
+    // Application should not give 200 response if it is not working well
+    throw new APIError(401, "Unauthorized request");
+  }
+
+  try {
+    const decodedToken = jwt.verify(
+      incomingRefreshToken,
+      process.env.REFRESH_TOKEN_SECRET
+    );
+
+    const user = await User.findById(decodedToken?._id);
+
+    if (!user) {
+      throw new APIError(401, "Invalid Refresh Token");
+    }
+
+    // if old refresh token is being used
+    if (incomingRefreshToken !== user.refreshToken) {
+      throw new APIError(401, "Refresh token is experied or changed");
+    }
+
+    const options = {
+      httpOnly: true,
+      secure: true,
+    };
+
+    const { accessToken, refreshToken } = await generateAccessAndRefreshTokens(
+      user._id
+    );
+
+    return res
+      .status(200)
+      .cookie("accessToken", accessToken, options)
+      .cookie("refreshToken", refreshToken, options)
+      .json(
+        new APIResponse(
+          200,
+          {
+            accessToken,
+            refreshToken,
+          },
+          "Access Token Refreshed"
+        )
+      );
+  } catch (error) {
+    throw new APIError(401, error?.message || "Invalid Refresh Token");
+  }
+});
+
+export { registerUser, loginUser, logoutUser, refreshAccessToken };
