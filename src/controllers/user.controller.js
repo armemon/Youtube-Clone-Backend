@@ -5,6 +5,7 @@ import { uploadOnCloudinary } from "../utils/cloudinary.js";
 import { APIResponse } from "../utils/APIResponse.js";
 import fs from "fs";
 import jwt from "jsonwebtoken";
+import mongoose from "mongoose";
 
 const generateAccessAndRefreshTokens = async (user) => {
   try {
@@ -165,7 +166,7 @@ const loginUser = asyncHandler(async (req, res) => {
   return res
     .status(200)
     .cookie("accessToken", accessToken, option)
-    .cookie("resfreshToken", refreshToken, option)
+    .cookie("refreshToken", refreshToken, option)
     .json(
       new APIResponse(
         200,
@@ -180,12 +181,12 @@ const loginUser = asyncHandler(async (req, res) => {
 });
 
 const logoutUser = asyncHandler(async (req, res) => {
-  User.findByIdAndUpdate(
+  await User.findByIdAndUpdate(
     req.user._id,
     {
       $set: {
         //set is operator
-        refreshToken: undefined,
+        refreshToken: 1, //undefined doesnot change refresh token therefore 1 to reset refresh token
       },
     },
     {
@@ -201,13 +202,14 @@ const logoutUser = asyncHandler(async (req, res) => {
   return res
     .status(200)
     .clearCookie("accessToken", options)
-    .clearCookie("resfreshToken", options)
+    .clearCookie("refreshToken", options)
     .json(new APIResponse(200, {}, "User logged out successfully"));
 });
 
 const refreshAccessToken = asyncHandler(async (req, res) => {
   const incomingRefreshToken =
     req.cookies.refreshToken || req.body.refreshToken;
+  console.log(req.cookies);
 
   if (!incomingRefreshToken) {
     // Application should not give 200 response if it is not working well
@@ -236,9 +238,8 @@ const refreshAccessToken = asyncHandler(async (req, res) => {
       secure: true,
     };
 
-    const { accessToken, refreshToken } = await generateAccessAndRefreshTokens(
-      user._id
-    );
+    const { accessToken, refreshToken } =
+      await generateAccessAndRefreshTokens(user);
 
     return res
       .status(200)
@@ -261,8 +262,12 @@ const refreshAccessToken = asyncHandler(async (req, res) => {
 
 const changePassword = asyncHandler(async (req, res) => {
   const { newPassword, oldPassword } = req.body;
-  const user = User.findById(req.user?._id);
-  const isPasswordCorrect = await user.isPasswordCorrect(oldPassword);
+
+  if(!newPassword || !oldPassword){
+    throw new APIError(400, "Old and New both Password are required")
+  }
+  const user = await User.findById(req.user?._id);
+  const isPasswordCorrect = await user?.isPasswordCorrect(oldPassword);
 
   if (!isPasswordCorrect) {
     throw new APIError(400, "Invalid Old Password");
@@ -279,14 +284,14 @@ const changePassword = asyncHandler(async (req, res) => {
 const getCurrentUser = asyncHandler(async (req, res) => {
   res
     .status(200)
-    .json(new APIResponse(200, res.user, "Current User fetched successfully"));
+    .json(new APIResponse(200, req.user, "Current User fetched successfully"));
 });
 
 const updateAccountDetails = asyncHandler(async (req, res) => {
   const { fullName, email } = req.body;
 
-  if (!fullName || !email) {
-    throw new APIError(400, "ALl fields are required");
+  if (!fullName && !email) {
+    throw new APIError(400, "Atleast one field is required");
   }
   const user = await User.findByIdAndUpdate(
     req.user?._id,
@@ -330,7 +335,9 @@ const updateUserAvatar = asyncHandler(async (req, res) => {
     }
   ).select("-password -refreshToken");
 
- res.status(200).json(new APIResponse(200, user, "Avatar updated successfully"))
+  res
+    .status(200)
+    .json(new APIResponse(200, user, "Avatar updated successfully"));
 });
 
 const updateUserCoverImage = asyncHandler(async (req, res) => {
@@ -359,7 +366,135 @@ const updateUserCoverImage = asyncHandler(async (req, res) => {
     }
   ).select("-password -refreshToken");
 
- res.status(200).json(new APIResponse(200, user, "Cover Image updated successfully"))
+  res
+    .status(200)
+    .json(new APIResponse(200, user, "Cover Image updated successfully"));
+});
+
+const getChannelProfile = asyncHandler(async (req, res) => {
+  const {channelUsername} = req.params;
+
+  if (!channelUsername) {
+    throw new APIError(400, "Channel Username is missing");
+  }
+
+  const channel = await User.aggregate([
+    { $match: { username: channelUsername.toLowerCase() } },
+    {
+      $lookup: {
+        from: "subscriptions",
+        localField: "_id",
+        foreignField: "channel",
+        as: "subscribers", //Subscription model will be saved as subscriptions collection(table) in M_DB
+      },
+    },
+    {
+      $lookup: {
+        from: "subscriptions",
+        localField: "_id",
+        foreignField: "subscriber",
+        as: "subscribedTo", //Subscription model will be saved as subscriptions collection(table) in M_DB
+      },
+    },
+    {
+      $addFields: {
+        subscribersCount: {
+          $size: "$subscribers",
+        },
+        subscribedToChannelCount: {
+          $size: "$subscribedTo",
+        },
+        isSubscribed: {
+          $cond: {
+            if: { $in: [req.users?._id, "$subscribers.subscriber"] }, //subscriber from subsribtion Model
+            then: true,
+            else: false,
+          },
+        },
+      },
+    },
+    {
+      $project: {
+        fullName: 1,
+        username: 1,
+        email: 1,
+        avatar: 1,
+        coverImage: 1,
+        subscribedToChannelCount: 1,
+        subscribersCount: 1,
+        isSubscribed:1,
+      },
+    },
+  ]);
+
+  console.log(channel); // channel is an array of match documents left after pipeline stages
+  // since we have only one document of a username.. one element will be in channel array
+
+  if (!channel?.length) {
+    console.log(channelUsername);
+    throw new APIError(404, "No channel found");
+  }
+
+  res
+    .status(200)
+    .json(
+      new APIResponse(200, channel[0], "Channel Profile recieved successfully")
+    );
+});
+
+const getWatchHistory = asyncHandler(async (req, res) => {
+  const user = await User.aggregate([
+    {
+      $match: {
+        _id: new mongoose.Types.ObjectId(req.user?._id), // new is necessary
+      },
+    },
+    {
+      $lookup: {
+        from: "videos",
+        localField: "watchHistory",
+        foreignField: "_id",
+        as: "watchHistory",
+        pipeline: [
+          {
+            $lookup: {
+              from: "users",
+              localField: "owner",
+              foreignField: "_id",
+              as: "owner",
+              pipeline: [
+                {
+                  $project: {
+                    fullName: 1,
+                    username: 1,
+                    avatar: 1,
+                  },
+                },
+              ],
+            },
+          },
+          {
+            $addFields: {
+              owner: {
+                // $arrayElemAt: [ "$watchHistory", 0 ]   //or
+                $first: "$owner",
+              },
+            },
+          },
+        ],
+      },
+    },
+  ]);
+
+  return res
+    .status(200)
+    .json(
+      new APIResponse(
+        200,
+        user[0].watchHistory,        //watch history is in array datatype
+        "Watch History fetched SUccessfully"
+      )
+    );
 });
 
 export {
@@ -371,5 +506,7 @@ export {
   getCurrentUser,
   updateAccountDetails,
   updateUserAvatar,
-  updateUserCoverImage
+  updateUserCoverImage,
+  getChannelProfile,
+  getWatchHistory,
 };

@@ -55,6 +55,7 @@ userSchema.pre("save", async function (next) {
   if (!this.isModified("password")) return next();
 
   this.password = await bcrypt.hash(this.password, 10);
+  // hash password is different even if we write same password
   next();
 });
 
